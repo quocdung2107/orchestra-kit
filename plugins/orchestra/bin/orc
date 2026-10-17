@@ -1,0 +1,9 @@
+#!/usr/bin/env python
+"""The plugin's `orc` entry point (Claude Code adds the plugin's bin/ to PATH). Logic in cli/orc_core.py."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "cli"))
+from orc_core import main  # noqa: E402
+
+sys.exit(main())

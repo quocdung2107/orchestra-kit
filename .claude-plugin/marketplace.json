@@ -1,0 +1,14 @@
+{
+  "name": "orchestra-kit",
+  "description": "Claude Code plugins by quocdung2107: orchestra (multi-agent orchestration with deterministic state).",
+  "owner": {
+    "name": "quocdung2107"
+  },
+  "plugins": [
+    {
+      "name": "orchestra",
+      "source": "./plugins/orchestra",
+      "description": "Multi-agent orchestration (researcher, coder, reviewer, context-builder) with deterministic state managed by the orc CLI."
+    }
+  ]
+}

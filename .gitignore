@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+# personal pattern list for tools/release_check.py — never commit
+tools/denylist.txt
+# per-machine Claude Code settings
+.claude/settings.local.json

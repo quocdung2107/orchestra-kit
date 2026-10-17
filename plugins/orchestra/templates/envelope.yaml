@@ -1,0 +1,9 @@
+# A subagent's result envelope: YAML only, no prose.
+msg: result
+task_id: TASK-0001
+status: done            # done | partial | blocked | failed
+outputs: []             # IDs (ART-x) or file paths relative to the project root
+evidence: []            # existing EVD-x, or {kind, result, summary, paths}
+proposed_decisions: []  # summary strings, or {summary, scope, supersedes}
+summary: ""             # ≤ 200 characters
+failure_class: null     # reviewer only: IMPL_BUG | SPEC_GAP | DECISION_CONFLICT | REGRESSION

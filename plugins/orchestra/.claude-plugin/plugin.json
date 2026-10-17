@@ -1,0 +1,10 @@
+{
+  "name": "orchestra",
+  "version": "0.2.0",
+  "description": "Multi-agent orchestration (researcher, coder, reviewer, context-builder) with deterministic state managed by the orc CLI.",
+  "author": {
+    "name": "quocdung2107"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/quocdung2107/orchestra-kit"
+}
