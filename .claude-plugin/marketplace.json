@@ -1,14 +1,17 @@
 {
   "name": "orchestra-kit",
-  "description": "Claude Code plugins by quocdung2107: orchestra (multi-agent orchestration with deterministic state).",
+  "description": "Claude Code plugins by quocdung2107: orcgate (multi-agent workflow with one user approval per request and deterministic state).",
   "owner": {
     "name": "quocdung2107"
   },
   "plugins": [
     {
-      "name": "orchestra",
-      "source": "./plugins/orchestra",
-      "description": "Multi-agent orchestration (researcher, coder, reviewer, context-builder) with deterministic state managed by the orc CLI."
+      "name": "orcgate",
+      "source": "./plugins/orcgate",
+      "description": "Multi-agent workflow (researcher, coder, reviewer, context-builder) with one explicit user approval per request and deterministic state managed by the orc CLI."
     }
-  ]
+  ],
+  "renames": {
+    "orchestra": "orcgate"
+  }
 }

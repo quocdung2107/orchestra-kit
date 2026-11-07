@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
-KIT = REPO / "plugins" / "orchestra"  # plugin root (cli/, hooks/, templates/…)
+KIT = REPO / "plugins" / "orcgate"  # plugin root (cli/, hooks/, templates/…)
 sys.path.insert(0, str(KIT / "cli"))
 import orc_core as oc  # noqa: E402
 import orc_verify as ov  # noqa: E402

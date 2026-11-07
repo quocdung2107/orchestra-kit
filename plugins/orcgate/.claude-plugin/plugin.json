@@ -1,0 +1,15 @@
+{
+  "name": "orcgate",
+  "displayName": "Orcgate",
+  "version": "0.3.0",
+  "description": "Multi-agent workflow for Claude Code: researcher, coder, reviewer and context-builder subagents, one explicit user approval per request, and project state kept in plain files by a deterministic CLI (orc).",
+  "author": {
+    "name": "quocdung2107",
+    "url": "https://github.com/quocdung2107"
+  },
+  "homepage": "https://github.com/quocdung2107/orchestra-kit#readme",
+  "repository": "https://github.com/quocdung2107/orchestra-kit",
+  "license": "MIT",
+  "keywords": ["multi-agent", "workflow", "approval", "planning", "code-review", "subagents"],
+  "icon": "./.claude-plugin/icon.png"
+}

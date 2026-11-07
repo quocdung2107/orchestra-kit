@@ -1,4 +1,4 @@
-# SCHEMA — orchestra-kit 0.2.0
+# SCHEMA — orcgate 0.3.0
 
 A blackboard-style multi-agent system for Claude Code: state lives in files (.md/.yaml + git), and agents
 pass IDs to each other instead of long chat.
@@ -7,11 +7,11 @@ pass IDs to each other instead of long chat.
 
 | Role | Implementation | Reads | Writes |
 |---|---|---|---|
-| A Orchestrator | the main Claude Code session + `/orchestra:auto` (full loop) or `/orchestra:plan` `/orchestra:run` `/orchestra:review` `/orchestra:next` `/orchestra:handoff` | brief, `orc show --meta`, `orc next` (metadata only) | only through `orc` |
-| B Researcher | subagent `orchestra:researcher` | task, earlier plans, code, docs | the body of the issued ART file |
-| C Coder | subagent `orchestra:coder` (owner `coder`, `coder-1`, …) | task + acceptance, context | files in `write_scope` |
-| D Reviewer | subagent `orchestra:reviewer` | `orc show TASK --pack` (acceptance + outputs + evidence) | the body of the review_report ART file |
-| Context Builder | subagent `orchestra:context-builder` | task, plan, KNOWLEDGE_MAP, `orc graph ...` | the body of the issued CTX file |
+| A Orchestrator | the main Claude Code session + `/orcgate:auto` (full loop) or `/orcgate:plan` `/orcgate:run` `/orcgate:review` `/orcgate:next` `/orcgate:handoff` | brief, `orc show --meta`, `orc next` (metadata only) | only through `orc` |
+| B Researcher | subagent `orcgate:researcher` | task, earlier plans, code, docs | the body of the issued ART file |
+| C Coder | subagent `orcgate:coder` (owner `coder`, `coder-1`, …) | task + acceptance, context | files in `write_scope` |
+| D Reviewer | subagent `orcgate:reviewer` | `orc show TASK --pack` (acceptance + outputs + evidence) | the body of the review_report ART file |
+| Context Builder | subagent `orcgate:context-builder` | task, plan, KNOWLEDGE_MAP, `orc graph ...` | the body of the issued CTX file |
 
 Single writer: only `orc` writes `.orchestra/state/`. Writing commands hold the lock `runtime/state.lock` and write files
 atomically (tmp + rename); every `status` change is appended to `state/journal.jsonl` (a hash chain checked by `orc validate`).
@@ -28,11 +28,13 @@ Acceptance criteria are referenced as `ART-0001#AC-2`, pointing at the line `- A
 ```
 orchestra-kit/                          (this repository = a plugin marketplace)
   .claude-plugin/marketplace.json
-  plugins/orchestra/
+  plugins/orcgate/
     .claude-plugin/plugin.json
     agents/{researcher,coder,reviewer,context-builder}.md
-    commands/{auto,auto-legacy,plan,run,review,next,handoff}.md
+    commands/{auto,plan,run,review,next,handoff}.md
+    references/auto-legacy.md
     hooks/hooks.json  hooks/{session_start,stop_check,prompt_log,guard}
+    scripts/py                          (POSIX sh: picks python3 / python / py -3 for hooks and bin/orc)
     bin/orc  bin/orc.cmd                (added to PATH by Claude Code while the plugin is enabled)
     cli/orc_core.py …  templates/  VERSION
   tests/  tools/release_check.py  SCHEMA.md  README.md  CHANGELOG.md  LICENSE
@@ -87,7 +89,7 @@ failure_class: null     # reviewer only
 
 | When received | Result | Task becomes |
 |---|---|---|
-| dispatched, owner coder | done | `in_review` → /orchestra:review |
+| dispatched, owner coder | done | `in_review` → /orcgate:review |
 | dispatched, other owner | done | `done` |
 | dispatched | partial | `ready` |
 | dispatched | blocked / failed | `blocked` / `failed` + needs_user |
@@ -102,7 +104,7 @@ A coder returning a file outside `write_scope` → orc rejects the whole envelop
 
 ## 6b. Two-stage workflow (projects without `workflow: k`)
 
-`/orchestra:auto` falls back to `commands/auto-legacy.md` when the brief has no `Workflow: K` line.
+`/orcgate:auto` falls back to `references/auto-legacy.md` when the brief has no `Workflow: K` line.
 
 1. **Understand & design — always stops.** The researcher writes a `research` ART with 4 sections: My understanding of the request ·
    Preliminary design · Unclear / missing information · Questions for the user. A sends the user `orc ask ART-x` verbatim.
@@ -194,12 +196,18 @@ at least L1. Shadow writes journal `event: triage` and does not write `task.leve
 ## 9. Claude Code integration
 
 - The plugin's `hooks/hooks.json` registers SessionStart, Stop, UserPromptSubmit and PreToolUse (`*`), each running
-  `python "${CLAUDE_PLUGIN_ROOT}/hooks/<name>"`; stdin is JSON with `session_id`, `cwd`.
+  `sh "${CLAUDE_PLUGIN_ROOT}/scripts/py" --hook "${CLAUDE_PLUGIN_ROOT}/hooks/<name>"`; stdin is JSON with `session_id`, `cwd`.
+  `scripts/py` runs the hook with `$ORCGATE_PYTHON`, `python3`, `python` or `py -3` (the first Python 3.10+ that starts),
+  caching the choice in `$CLAUDE_PLUGIN_DATA/python-cmd`. Without Python it exits 0 and, only in projects with
+  `.orchestra/`, prints one warning line (added to the context by SessionStart and UserPromptSubmit).
+- When `orc approve` / `orc resume` / `orc abort` find no typed line and not a single prompt was recorded since the
+  request, the error says that the UserPromptSubmit hook is probably not running.
 - SessionStart: `hookSpecificOutput.additionalContext` is added to the context; it cannot block the session.
 - Stop: blocks with the JSON `{"decision": "block", "reason": "..."}` (exit 0).
-- Subagents are namespaced by the plugin: `orchestra:researcher`, `orchestra:coder`, `orchestra:reviewer`, `orchestra:context-builder`.
+- Subagents are namespaced by the plugin: `orcgate:researcher`, `orcgate:coder`, `orcgate:reviewer`, `orcgate:context-builder`.
+  The guard and the legacy-hook bridge also accept the name used before 0.3.0 (`orchestra:` / `orchestra@…`).
   Only a subagent's final answer reaches the main session.
-- Commands: `/orchestra:<name>`; frontmatter `description, argument-hint, allowed-tools, disable-model-invocation`; `$ARGUMENTS`.
+- Commands: `/orcgate:<name>`; frontmatter `description, argument-hint, allowed-tools, disable-model-invocation`; `$ARGUMENTS`.
 
 ## 10. Graph & Context Builder
 
