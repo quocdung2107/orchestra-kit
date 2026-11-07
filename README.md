@@ -165,8 +165,18 @@ claude plugin update orcgate@orchestra-kit
 ```
 
 or turn on auto-update for the `orchestra-kit` marketplace in `/plugin` → Marketplaces. Start a new session (or run
-`/reload-plugins`) afterwards. Installs of the former name `orchestra@orchestra-kit` are migrated to `orcgate` by the
-marketplace's `renames` entry; project files that still say `orchestra@orchestra-kit` should be updated by hand.
+`/reload-plugins`) afterwards.
+
+**Coming from 0.2.x (`orchestra@orchestra-kit`)**: after the marketplace updates, Claude Code rewrites
+`orchestra@orchestra-kit` to `orcgate@orchestra-kit` in your settings files (the marketplace's `renames` entry), but
+the new plugin must be installed once:
+
+```
+/plugin marketplace update orchestra-kit
+/plugin install orcgate@orchestra-kit
+```
+
+Then start a new session. Commands are now `/orcgate:…`; existing `.orchestra/` directories keep working unchanged.
 
 ## Uninstall
 

@@ -8,7 +8,8 @@ All notable changes to this project are documented here. Versions follow [Semant
   directory, where the name `orchestra` is taken. Commands are now `/orcgate:auto`, `/orcgate:plan`, …; subagents are
   `orcgate:researcher`, `orcgate:coder`, … The marketplace (`orchestra-kit`), the `orc` CLI and the project state
   directory `.orchestra/` keep their names. `marketplace.json` has `renames: {"orchestra": "orcgate"}` so existing
-  installs migrate; the guard and the legacy-hook bridge accept both names.
+  settings migrate (run `/plugin install orcgate@orchestra-kit` once after updating); the guard and the legacy-hook
+  bridge accept both names.
 - **Python is found on every OS**: hooks and `bin/orc` start through `scripts/py`, which tries `$ORCGATE_PYTHON`,
   `python3`, `python` and `py -3` (skipping the Windows Store alias) and caches the choice in `$CLAUDE_PLUGIN_DATA`.
   Before, every hook called `python`, which does not exist on macOS or on a default Debian/Ubuntu, so the hooks failed
