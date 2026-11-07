@@ -1,4 +1,4 @@
-"""Bridge: a legacy global hook yields to the plugin in projects that enabled the orchestra plugin.
+"""Bridge: a legacy global hook yields to the plugin in projects that enabled the plugin (orcgate@…, or orchestra@… before 0.3.0).
 
 Run: python -m unittest tests.test_bridge -v
 """
@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-KIT = REPO / "plugins" / "orchestra"  # plugin root (cli/, hooks/, templates/…)
+KIT = REPO / "plugins" / "orcgate"  # plugin root (cli/, hooks/, templates/…)
 sys.path.insert(0, str(KIT / "cli"))
 
 import orc_core as oc  # noqa: E402
@@ -48,7 +48,7 @@ class TestBridge(unittest.TestCase):
     def assert_runs(self, plugin_root=None):
         code, out, err = hook("session_start", self.payload, plugin_root)
         self.assertEqual(code, 0, err)
-        self.assertIn("Orchestra brief", json.loads(out)["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("Orcgate brief", json.loads(out)["hookSpecificOutput"]["additionalContext"])
         code, out, err = hook("stop_check", self.payload, plugin_root)
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)["decision"], "block")
@@ -67,6 +67,11 @@ class TestBridge(unittest.TestCase):
     def test_plugin_enabled_legacy_hook_yields(self):
         self.settings("settings.local.json", json.dumps({"enabledPlugins": {"orchestra@orchestra-kit": True}}))
         self.assertTrue(oc.plugin_enabled(self.root / ".orchestra"))
+        self.assert_silent()
+
+    def test_renamed_plugin_enabled_legacy_hook_yields(self):
+        self.settings("settings.json", json.dumps({"enabledPlugins": {"orcgate@orchestra-kit": True}}))
+        self.assertTrue(oc.plugin_enabled(self.root))
         self.assert_silent()
 
     def test_plugin_enabled_plugin_hook_runs(self):
@@ -92,7 +97,7 @@ class TestPluginHooks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             for event, name in want.items():
                 cmd = cfg[event][0]["hooks"][0]["command"]
-                self.assertEqual(cmd, f'python "${{CLAUDE_PLUGIN_ROOT}}/hooks/{name}"')
+                self.assertEqual(cmd, f'sh "${{CLAUDE_PLUGIN_ROOT}}/scripts/py" --hook "${{CLAUDE_PLUGIN_ROOT}}/hooks/{name}"')
                 self.assertTrue((KIT / "hooks" / name).is_file(), name)
                 payload = {"cwd": d, "session_id": "x", "prompt": "orc:approve TASK-0001 ABC",
                            "tool_name": "Write", "tool_input": {"file_path": f"{d}/a.txt"}}

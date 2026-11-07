@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-KIT = REPO / "plugins" / "orchestra"  # plugin root (cli/, hooks/, templates/…)
+KIT = REPO / "plugins" / "orcgate"  # plugin root (cli/, hooks/, templates/…)
 sys.path.insert(0, str(KIT / "cli"))
 
 import orc_core as oc  # noqa: E402
@@ -415,7 +415,7 @@ class TestHandoffAndHooks(Base):
                                                 "session_id": "abc"})
         self.assertEqual(code, 0, err)
         ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("Orchestra brief", ctx)
+        self.assertIn("Orcgate brief", ctx)
         self.assertIn("--key abc", ctx)
 
     def test_stop_hook_only_blocks_open_session(self):

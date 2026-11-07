@@ -1,0 +1,5 @@
+#!/bin/sh
+# The plugin's `orc` entry point (Claude Code adds the plugin's bin/ to PATH). It picks a Python 3 with scripts/py;
+# the logic is in cli/orc_core.py.
+root=$(cd "$(dirname "$0")/.." && pwd)
+exec sh "$root/scripts/py" "$root/cli/orc" "$@"

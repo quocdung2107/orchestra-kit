@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-KIT = REPO / "plugins" / "orchestra"  # plugin root (cli/, hooks/, templates/…)
+KIT = REPO / "plugins" / "orcgate"  # plugin root (cli/, hooks/, templates/…)
 sys.path.insert(0, str(KIT / "cli"))
 
 import graph_adapter as ga  # noqa: E402

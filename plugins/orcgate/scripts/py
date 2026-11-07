@@ -1,0 +1,79 @@
+#!/bin/sh
+# Runs a Python script of the plugin with the first Python 3.10+ found: $ORCGATE_PYTHON, python3, python, py -3.
+# Used by hooks/hooks.json and bin/orc, so the plugin works where only `python3` exists (macOS, Debian/Ubuntu)
+# and where `python` is the Windows Store alias that only prints an install hint.
+#
+#   sh scripts/py --hook <script>     a hook: without Python, says so (only in projects with .orchestra/) and exits 0
+#   sh scripts/py <script> [args...]  the orc CLI: without Python, prints an error and exits 127
+#
+# The interpreter found is cached in $CLAUDE_PLUGIN_DATA (set for hooks), so a hook probes only once per machine.
+
+hook=
+if [ "$1" = "--hook" ]; then
+    hook=1
+    shift
+fi
+
+usable() {
+    "$@" -c 'import sys; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1
+}
+
+exe=
+flag=
+cache=
+if [ -n "$CLAUDE_PLUGIN_DATA" ]; then
+    cache="$CLAUDE_PLUGIN_DATA/python-cmd"
+fi
+
+if [ -n "$ORCGATE_PYTHON" ]; then
+    exe=$ORCGATE_PYTHON
+elif [ -n "$cache" ] && [ -f "$cache" ]; then
+    { read -r exe; read -r flag; } < "$cache"
+    if ! command -v "$exe" >/dev/null 2>&1; then
+        exe=
+        flag=
+    fi
+fi
+
+if [ -z "$exe" ]; then
+    for cand in python3 python; do
+        if usable "$cand"; then
+            exe=$cand
+            break
+        fi
+    done
+    if [ -z "$exe" ] && usable py -3; then
+        exe=py
+        flag=-3
+    fi
+    if [ -n "$exe" ] && [ -n "$cache" ]; then
+        mkdir -p "$CLAUDE_PLUGIN_DATA" 2>/dev/null && printf '%s\n%s\n' "$exe" "$flag" > "$cache" 2>/dev/null
+    fi
+fi
+
+if [ -n "$exe" ]; then
+    if [ -n "$flag" ]; then
+        exec "$exe" "$flag" "$@"
+    fi
+    exec "$exe" "$@"
+fi
+
+msg="[orcgate] Python 3.10+ not found (tried python3, python, py -3), so the orcgate hooks and orc are not running: no brief, and orc:approve lines are not recorded. Install Python 3.10+ with PyYAML, or set ORCGATE_PYTHON to its path, then start a new session."
+if [ -z "$hook" ]; then
+    echo "$msg" >&2
+    exit 127
+fi
+# Stay silent outside orcgate projects: walk up from the session directory looking for .orchestra/config.yaml.
+dir=$(pwd)
+while :; do
+    if [ -f "$dir/.orchestra/config.yaml" ]; then
+        echo "$msg"
+        echo "$msg" >&2
+        break
+    fi
+    parent=$(dirname "$dir")
+    [ "$parent" = "$dir" ] && break
+    dir=$parent
+done
+cat >/dev/null
+exit 0

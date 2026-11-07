@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
-KIT = REPO / "plugins" / "orchestra"  # plugin root (cli/, hooks/, templates/…)
+KIT = REPO / "plugins" / "orcgate"  # plugin root (cli/, hooks/, templates/…)
 sys.path.insert(0, str(KIT / "cli"))
 import orc_approval as oa  # noqa: E402
 import orc_core as oc  # noqa: E402
@@ -110,6 +110,16 @@ class TestApprove(Base):
         with self.assertRaises(oc.OrcError):
             oa.approve(self.root, self.t)
         self.assertEqual(len(n), 6)
+
+    def test_error_points_at_the_hook_when_nothing_was_recorded(self):
+        self.nonce()
+        with self.assertRaises(oc.OrcError) as e:  # no prompt recorded at all since the request
+            oa.approve(self.root, self.t)
+        self.assertIn("UserPromptSubmit hook is not running", str(e.exception))
+        self.say("ok approved")  # the hook works, the user just has not typed the line
+        with self.assertRaises(oc.OrcError) as e:
+            oa.approve(self.root, self.t)
+        self.assertNotIn("UserPromptSubmit", str(e.exception))
 
     def test_prompt_before_request_does_not_count(self):
         # the user typed before orc issued the nonce: it cannot match the new nonce, and ts is before the request
@@ -223,11 +233,13 @@ class TestGuardDecide(Base):
         self.assertEqual(self.d(a, "Edit", {"file_path": "app/src/a.ts"}), "deny")
         self.assertEqual(self.d(a, "WebSearch", {"query": "x"}), "deny")
         self.assertEqual(self.d(a, "WebSearch", {"query": "x"}, agent_type="researcher-external"), "allow")
-        # plugin mode: agent_type carries a namespace
+        # plugin mode: agent_type carries a namespace (orcgate:, or orchestra: before 0.3.0)
         self.assertEqual(self.d(a, "WebSearch", {"query": "x"}, agent_type="orchestra:researcher-external"),
                          "allow")
         self.assertEqual(self.d(a, "WebSearch", {"query": "x"}, agent_type="other:researcher-external"), "deny")
         self.assertEqual(self.d(a, "WebSearch", {"query": "x"}, agent_type="orchestra:researcher"), "deny")
+        self.assertEqual(self.d(a, "WebSearch", {"query": "x"}, agent_type="orcgate:researcher-external"), "allow")
+        self.assertEqual(self.d(a, "WebSearch", {"query": "x"}, agent_type="orcgate:researcher"), "deny")
         self.assertEqual(self.d(a, "Bash", {"command": "git log --oneline -5"}), "allow")
         self.assertEqual(self.d(a, "Bash", {"command": "git commit -m x"}), "allow")  # checked afterwards
         v = self.act([("TASK-0002", "in_review", "coder", ["app/src/"], [".orchestra/artifacts/ART-0009.md"])])
