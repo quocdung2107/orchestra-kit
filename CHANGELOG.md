@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-11-24
+
+- **A model per subagent.** researcher and reviewer `opus`, coder and context-builder `sonnet` (agent frontmatter).
+  `orc model TASK [--role …]` and `model=` on `orc next` lines give the alias the Orchestrator passes when it calls the
+  subagent; a coder task sent back by the reviewer (attempts ≥ 1) gets `coder_retry` (`opus`). Override with `models:` in
+  the config. `orc advance … --to dispatched --model M` records the model in the journal; `orc report` has a Model column.
+- **Plans live in ART files only.** `orc docs index` adds a "Plans (orcgate)" group linking the accepted plan/research ARTs
+  (latest version); the researcher never copies a plan into `docs/`; `/orcgate:auto` refreshes the index at the end.
+- **Config checked up front**: `orc validate` and the brief report bad `verify.commands` names (with a hint to use `lint`),
+  `models` and `guard` sections, instead of failing at the first dispatch.
+- **No false `approval_missing`**: K child tasks are no longer checked against a per-task approval (K binds the root).
+- **Opt-in enforcing guard rules** `guard.enforce: [edit_write, git_push]` (+ `guard.always_writable`); the hook exits 2
+  with the reason. Everything else stays shadow. Shadow false positives fixed: `git merge-base` is not a merge, `sed`
+  without `-i` does not write.
+- **One overlapping K request at a time**: entering IMPLEMENTING is refused while another request with an overlapping
+  write_scope is being implemented (disjoint scopes only warn). The brief marks requests/dispatched tasks idle > 7 days as stale.
+
 ## [0.3.0] — 2026-11-07
 
 - **Renamed the plugin `orchestra` → `orcgate`** (display name "Orcgate"), so it can be listed in Anthropic's plugin

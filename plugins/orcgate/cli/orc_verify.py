@@ -68,7 +68,8 @@ def normalize(vcfg) -> dict:
     cmds = {}
     for name, spec in (vcfg.get("commands") or {}).items():
         if name not in COMMAND_NAMES:
-            raise oc.OrcError(f"verify.commands: '{name}' is not one of {COMMAND_NAMES}")
+            raise oc.OrcError(f"verify.commands: '{name}' is not one of {COMMAND_NAMES}"
+                              " (a static/architecture check such as a dependency check belongs under `lint`)")
         if isinstance(spec, str):
             spec = {"run": spec}
         if not isinstance(spec, dict) or not str(spec.get("run") or "").strip():

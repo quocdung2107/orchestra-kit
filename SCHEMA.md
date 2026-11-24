@@ -1,21 +1,27 @@
-# SCHEMA — orcgate 0.3.0
+# SCHEMA — orcgate 0.4.0
 
 A blackboard-style multi-agent system for Claude Code: state lives in files (.md/.yaml + git), and agents
 pass IDs to each other instead of long chat.
 
 ## 1. Roles
 
-| Role | Implementation | Reads | Writes |
-|---|---|---|---|
-| A Orchestrator | the main Claude Code session + `/orcgate:auto` (full loop) or `/orcgate:plan` `/orcgate:run` `/orcgate:review` `/orcgate:next` `/orcgate:handoff` | brief, `orc show --meta`, `orc next` (metadata only) | only through `orc` |
-| B Researcher | subagent `orcgate:researcher` | task, earlier plans, code, docs | the body of the issued ART file |
-| C Coder | subagent `orcgate:coder` (owner `coder`, `coder-1`, …) | task + acceptance, context | files in `write_scope` |
-| D Reviewer | subagent `orcgate:reviewer` | `orc show TASK --pack` (acceptance + outputs + evidence) | the body of the review_report ART file |
-| Context Builder | subagent `orcgate:context-builder` | task, plan, KNOWLEDGE_MAP, `orc graph ...` | the body of the issued CTX file |
+| Role | Implementation | Model | Reads | Writes |
+|---|---|---|---|---|
+| A Orchestrator | the main Claude Code session + `/orcgate:auto` (full loop) or `/orcgate:plan` `/orcgate:run` `/orcgate:review` `/orcgate:next` `/orcgate:handoff` | the user's (`/model`) | brief, `orc show --meta`, `orc next` (metadata only) | only through `orc` |
+| B Researcher | subagent `orcgate:researcher` | opus | task, earlier plans, code, docs | the body of the issued ART file |
+| C Coder | subagent `orcgate:coder` (owner `coder`, `coder-1`, …) | sonnet; opus once sent back (attempts ≥ 1) | task + acceptance, context | files in `write_scope` |
+| D Reviewer | subagent `orcgate:reviewer` | opus | `orc show TASK --pack` (acceptance + outputs + evidence) | the body of the review_report ART file |
+| Context Builder | subagent `orcgate:context-builder` | sonnet | task, plan, KNOWLEDGE_MAP, `orc graph ...` | the body of the issued CTX file |
 
 Single writer: only `orc` writes `.orchestra/state/`. Writing commands hold the lock `runtime/state.lock` and write files
 atomically (tmp + rename); every `status` change is appended to `state/journal.jsonl` (a hash chain checked by `orc validate`).
 B/C/D return a **YAML envelope**; A loads it with `orc apply -`.
+
+**Models.** Each agent file sets `model:` (fallback). `orc model TASK [--role context-builder|reviewer]` and the
+`model=` on `orc next` READY/REVIEW lines give the alias A passes as the Agent tool's `model` parameter (it wins over the
+frontmatter); `orc advance T --to dispatched --model M` records it in the journal and `orc report` shows it. Aliases only
+(`opus|sonnet|haiku|fable|inherit`); `config.yaml` `models:` overrides `researcher, reviewer, coder, context-builder,
+coder_retry`. Plans/research live only in ART files; `orc docs index` lists the accepted ones under "Plans (orcgate)".
 
 ## 2. IDs
 
@@ -159,13 +165,14 @@ at least L1. Shadow writes journal `event: triage` and does not write `task.leve
 | `orc brief [--key K]` | brief of at most ~1.5k tokens |
 | `orc new request|task|artifact|decision|context|evidence ...` | creates an entry, prints its ID; `orc new task --from ART-x` creates tasks from the ```` ```yaml orc-tasks ```` block of an accepted plan |
 | `orc set ID k=v ...` | edits fields (values parsed as YAML: `[a,b]`, `true`); **never** changes `status, level, attempts, failure_class, needs_user, resume_status, parent, workflow, …` |
-| `orc advance ID --to X` | changes status by the transition table: TASK `pending/ready→dispatched` (blocked_by done), `dispatched→ready`, `blocked(needs_user)/failed→ready`, researcher `done→dispatched`; ART `draft→accepted/rejected` (except research ARTs: only through `orc approve`); DEC: none — only `orc approve`; K root tasks: the K table |
+| `orc advance ID --to X [--model M]` | (`--model`: recorded on the journal line of a move to `dispatched`)  changes status by the transition table: TASK `pending/ready→dispatched` (blocked_by done), `dispatched→ready`, `blocked(needs_user)/failed→ready`, researcher `done→dispatched`; ART `draft→accepted/rejected` (except research ARTs: only through `orc approve`); DEC: none — only `orc approve`; K root tasks: the K table |
 | `orc new decision` | creates only `proposed` DECs; `--status accepted/superseded` is refused. `orc set` cannot edit `summary/scope/supersedes` of an accepted DEC |
 | `orc show ID [--meta] [--pack]` | `--meta` for A; `--pack` for the reviewer |
 | `orc approval request ID...` | a binding per ID — TASK: `plan_hash + write_scope_hash + level + risk_flags`; DEC: content; ART: body — issues a single-use nonce and prints the line the user must type, `orc:approve ID1,ID2 NONCE` (one approval for several IDs) |
 | `orc approve ID...` | only when the UserPromptSubmit hook recorded exactly that line from the user after the request, the nonce is unused and no binding changed: DEC `proposed→accepted` (the superseded DEC becomes superseded), ART `draft→accepted`, TASK records the approval; `state/approvals.yaml` + journal. **The only way to create an accepted DEC** |
 | `orc approval check TASK` | is the approval still valid? plan/scope/level/risk changed ⇒ expired (exit 3) |
 | `orc verify TASK` | deterministic V1/V2: compares the files changed since the checkpoint (created on `advance → dispatched` of a coder task, including a snapshot of the config's `verify:` section) with write_scope, scans risk_paths/secrets, runs `test/typecheck/lint/build` from the snapshot (env without secret-like variables, cwd inside the project, timeout); creates EVD `by: orc` and prints `MISMATCH` against self-reported EVD. Each command: pass / `TEST|LINT|BUILD|TYPECHECK_FAILURE` / `ENVIRONMENT_FAILURE` (blocked by Application Control, missing native binding, command not found, exit 126/127 — EVD `info`, not a MISMATCH). Exit 0 PASS, 6 FAIL, 7 INCOMPLETE (environment errors only). Does not change the task status |
+| `orc model TASK [--role R]` | the model alias for the task's subagent (see §1 Models) |
 | `orc next` | promotes tasks, prints READY / REVIEW / ASK USER / NEXT (and `K:` hints for root tasks) |
 | `orc apply FILE|-` | loads an envelope, routes it, prints `ROUTE:` |
 | `orc handoff open|check` | opens/checks the session handoff |
@@ -176,7 +183,7 @@ at least L1. Shadow writes journal `event: triage` and does not write `task.leve
 | `orc triage run|show|downgrade ID` | triage in shadow mode (§6c) |
 | `orc validate [--handoff] [--key K]` | refuses: bad frontmatter, duplicate IDs, summary > 200, references to missing IDs, invalid enums, orphan files, a broken journal |
 
-## 8b. Guard, approvals, SAFE_MODE (shadow)
+## 8b. Guard, approvals, SAFE_MODE (shadow + opt-in enforcing rules)
 
 - The **UserPromptSubmit** hook `hooks/prompt_log` → `runtime/prompts.jsonl`: ts, session, sha256 of the user's prompt, and verbatim only
   the `orc:...` lines; a hash chain. The **PreToolUse** hook `hooks/guard` → `runtime/guard-shadow.jsonl` (shadow: always
@@ -192,6 +199,15 @@ at least L1. Shadow writes journal `event: triage` and does not write `task.leve
 - Path matching (write_scope, risk/guard/artifact paths): gitignore-style, anchored at the project root — `*` does not cross `/`,
   `**` crosses levels, a trailing `/` is a directory (`orc_guard.match_path`).
 - Journal: a state-writing `orc` command that is refused ⇒ a line `{event: rejected, task, operation, reason, reason_hash, actor, ts}`.
+
+- **Enforcing rules (opt-in)**: `guard.enforce: [edit_write, git_push]` in the config (copied into `active.json`). `edit_write`
+  blocks Edit/Write into deny_always areas; outside write_scope while a coder task runs; and any project file while a K request
+  is open (not DONE/INTEGRATED/ABORTED/FAILED) and no coder task runs — except permitted artifact/context/session files and
+  `guard.always_writable` globs. `git_push` blocks `git push`. The hook exits 2 with the reason; everything else stays shadow.
+- `orc validate` and the brief check the config up front (verify command names, `models`, `guard`).
+- K: `orc advance R --to IMPLEMENTING` is refused while another K request in IMPLEMENTING/VERIFYING has an overlapping
+  combined write_scope (one working tree); disjoint scopes only warn. The brief marks a K request or a dispatched task with no
+  status change for more than 7 days as stale.
 
 ## 9. Claude Code integration
 

@@ -8,6 +8,8 @@ disable-model-invocation: true
 You are the **Orchestrator (A)**. Request: $ARGUMENTS
 
 Rules for A: read only metadata and `orc` command output; every state write goes through `orc`; pass IDs to subagents.
+
+**Models.** Before every subagent call run `orc model <TASK-ID>` (add `--role context-builder` or `--role reviewer` for those agents) and pass the printed alias as the Agent tool's `model` parameter; on the matching `orc advance <TASK-ID> --to dispatched` add `--model <same alias>`. `orc next` shows the same `model=` on READY/REVIEW lines. A coder task that was sent back (attempts ≥ 1) gets the stronger model automatically. Never choose a model yourself.
 Do not report progress step by step; talk to the user only at stop points and in the final report.
 **Never** type, copy or "help" the user with an `orc:approve` / `orc:resume` / `orc:abort` line — only the user types them.
 
@@ -71,6 +73,7 @@ Precondition: the brief has a `Workflow: K` line.
 5. Every coder task submitted → `orc advance <R> --to VERIFYING`; every coder task done → `orc advance <R> --to DONE`.
 6. Finish:
    - Code changes live on the branch `orchestra/<R>` (in the code repo, if it is separate), committed; **never merge or push**. Commit `.orchestra/` in the project repo.
+   - If `docs/INDEX.md` exists → `orc docs index` (lists the accepted plan ARTs; skip on error).
    - Fill in `.orchestra/sessions/<S-ID>.md`, `orc handoff check --key ...`, `orc validate`.
    - Reply to the user **once**: `orc report <PT>` (keep the table as is) + at most 5 lines: assumptions you chose,
      what the user should test by hand, branches to merge. Once the user has merged → `orc advance <R> --to INTEGRATED`.

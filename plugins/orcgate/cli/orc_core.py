@@ -64,6 +64,7 @@ SUMMARY_MAX = 200
 MAX_ATTEMPTS = 2          # attempts > 2 → ask the user
 MAX_STOP_BLOCKS = 3       # prevents an endless loop in the Stop hook
 BRIEF_MAX_CHARS = 6000    # ~1.5k token
+STALE_REQUEST_DAYS = 7    # brief marks an open K request with no status change for longer as stale
 LOCK_WAIT = 10.0          # seconds to wait for the state lock
 LOCK_STALE = 120.0        # a lock older than this is considered abandoned (dead process)
 JOURNAL_FILE = "journal.jsonl"
@@ -103,6 +104,13 @@ OPTIONAL_FIELDS = {"evidence": {"by"},
                    "task": {"level", "risk_flags", "parent", "workflow", "recovery_action"}}  # parent/workflow/recovery_action: K; level/risk_flags: triage
 LIST_FIELDS = {k: {f for f, d in v.items() if isinstance(d, list)} for k, v in FIELDS.items()}
 SESSION_FIELDS = ("id", "task", "role", "result")
+
+# Models per subagent role (Claude Code aliases, never pinned model IDs). `config.yaml` `models:` overrides any key.
+# coder_retry: the model for a coder task that has already been sent back once (attempts >= 1).
+MODEL_ALIASES = ("opus", "sonnet", "haiku", "fable", "inherit")
+MODEL_DEFAULTS = {"researcher": "opus", "reviewer": "opus", "coder": "sonnet", "context-builder": "sonnet",
+                  "coder_retry": "opus"}
+MODEL_ROLES = ("researcher", "reviewer", "coder", "context-builder")
 
 
 class OrcError(Exception):
@@ -322,10 +330,83 @@ def write_active(root: Path) -> None:
             continue
         if (fm or {}).get("result") == "pending":
             writable.append(f"{ORC_DIR}/sessions/{sid}.md")
-    protected = as_list((load_config(root).get("guard") or {}).get("protected_paths"))
+    guard = load_config(root).get("guard") or {}
+    guard = guard if isinstance(guard, dict) else {}
+    protected = as_list(guard.get("protected_paths"))
+    enforce = [r for r in as_list(guard.get("enforce")) if r in GUARD_ENFORCE_RULES]
+    # Open K requests: while one is open, project files are edited only by a dispatched coder task (guard edit_write)
+    open_requests = [{"id": t["id"], "status": t.get("status")} for t in tasks if isinstance(t, dict)
+                     and t.get("workflow") == "k" and t.get("status") not in ("DONE", "INTEGRATED", "ABORTED", "FAILED")]
     write_text(orc(root) / "runtime" / "active.json",
-               json.dumps({"version": 2, "tasks": active, "writable": sorted(writable), "protected": protected},
+               json.dumps({"version": 3, "tasks": active, "writable": sorted(writable), "protected": protected,
+                           "enforce": enforce, "always_writable": as_list(guard.get("always_writable")),
+                           "open_requests": open_requests},
                           ensure_ascii=False, indent=1) + "\n")
+
+
+def model_errors(cfg: dict) -> list:
+    """Errors in the config's `models:` section (unknown key or a value that is not an alias)."""
+    models = cfg.get("models")
+    if models is None:
+        return []
+    if not isinstance(models, dict):
+        return ["config.yaml: `models` must be a mapping"]
+    errs = []
+    for k, v in models.items():
+        if k not in MODEL_DEFAULTS:
+            errs.append(f"config.yaml: models.{k} is not one of {', '.join(MODEL_DEFAULTS)}")
+        elif v not in MODEL_ALIASES:
+            errs.append(f"config.yaml: models.{k}: '{v}' is not one of {'|'.join(MODEL_ALIASES)}")
+    return errs
+
+
+def model_table(root: Path, cfg: dict | None = None) -> dict:
+    cfg = load_config(root) if cfg is None else cfg
+    table = dict(MODEL_DEFAULTS)
+    models = cfg.get("models")
+    if isinstance(models, dict):
+        table.update({k: v for k, v in models.items() if k in MODEL_DEFAULTS and v in MODEL_ALIASES})
+    return table
+
+
+def model_for(root: Path, task: dict, role: str | None = None, cfg: dict | None = None) -> str:
+    """The model alias the Orchestrator passes when it calls the subagent for `task` in `role`
+    (default: the task owner's agent). A coder task with attempts >= 1 gets `coder_retry`."""
+    table = model_table(root, cfg)
+    role = role or agent_for(task.get("owner"))
+    if role not in MODEL_ROLES:
+        return "inherit"  # orchestrator: the main session, chosen by the user
+    if role == "coder" and int(task.get("attempts") or 0) >= 1:
+        return table["coder_retry"]
+    return table[role]
+
+
+GUARD_ENFORCE_RULES = ("edit_write", "git_push")
+
+
+def config_errors(cfg: dict) -> list:
+    """Errors in config.yaml found up front (validate, brief), not only when a task is dispatched."""
+    errs = []
+    if cfg.get("verify") is not None:
+        import orc_verify  # noqa: PLC0415
+        try:
+            orc_verify.normalize(cfg.get("verify"))
+        except (OrcError, TypeError, ValueError) as exc:
+            errs.append(f"config.yaml: {exc}")
+    errs.extend(model_errors(cfg))
+    guard = cfg.get("guard")
+    if guard is not None and not isinstance(guard, dict):
+        errs.append("config.yaml: `guard` must be a mapping")
+    elif isinstance(guard, dict):
+        enforce = guard.get("enforce")
+        if enforce is not None:
+            if not isinstance(enforce, list) or any(r not in GUARD_ENFORCE_RULES for r in enforce):
+                errs.append(f"config.yaml: guard.enforce must be a list of {', '.join(GUARD_ENFORCE_RULES)}")
+        for key in ("always_writable", "protected_paths"):
+            val = guard.get(key)
+            if val is not None and (not isinstance(val, list) or not all(isinstance(x, str) for x in val)):
+                errs.append(f"config.yaml: guard.{key} must be a list of path patterns")
+    return errs
 
 
 def journal_errors(root: Path) -> list:
@@ -671,8 +752,16 @@ def guarded_set(root: Path, id_: str, changes: dict) -> dict:
     return set_fields(root, id_, changes)
 
 
-def advance(root: Path, id_: str, to: str) -> dict:
-    """Manual state transition per the ADVANCE_MOVES table (basic workflow rules)."""
+def advance(root: Path, id_: str, to: str, model: str | None = None) -> dict:
+    """Manual state transition per the ADVANCE_MOVES table (basic workflow rules).
+    `model`: the alias the subagent is called with; recorded on the journal line of a move to `dispatched`."""
+    if model is not None:
+        if model not in MODEL_ALIASES:
+            raise OrcError(f"--model must be one of {'|'.join(MODEL_ALIASES)}")
+        if to != "dispatched":
+            raise OrcError("--model is only recorded on a move to dispatched")
+        with journal_context(extra={**_JOURNAL["extra"], "model": model}):
+            return advance(root, id_, to)
     kind = kind_of(id_)
     if kind not in ADVANCE_MOVES:
         raise OrcError(f"{id_}: a {kind} has no status to advance")
@@ -711,12 +800,15 @@ def advance(root: Path, id_: str, to: str) -> dict:
             orc_k.child_dispatch_check(root, e)  # K request: root IMPLEMENTING + a valid approval
             import orc_verify  # noqa: PLC0415 - same cli/ directory
             import orc_approval  # noqa: PLC0415
-            ok, why = orc_approval.check(root, id_)
-            if not ok:  # shadow: record only, do not block
-                orc_approval.shadow_log(root, {"event": "approval_missing", "task": id_, "reason": why})
+            if not orc_k.is_root(orc_k.parent_of(root, e)):
+                # K children were checked above against the root's approval; the per-task check would always
+                # report "no approval" for them (approvals bind the root), so it only runs outside K.
+                ok, why = orc_approval.check(root, id_)
+                if not ok:  # shadow: record only, do not block
+                    orc_approval.shadow_log(root, {"event": "approval_missing", "task": id_, "reason": why})
             cp = orc_verify.make_checkpoint(root, id_)  # None: verify not configured, or a checkpoint exists
             if cp:
-                with journal_context(extra={"checkpoint": cp}):
+                with journal_context(extra={**_JOURNAL["extra"], "checkpoint": cp}):
                     return set_fields(root, id_, changes)
     return set_fields(root, id_, changes)
 
@@ -932,6 +1024,7 @@ def validate(root: Path) -> list:
     for f in ("project_id", "kit_version"):
         if not cfg.get(f):
             errs.append(f"config.yaml: missing {f}")
+    errs.extend(config_errors(cfg))
     for kind in KINDS:
         try:
             items = load_registry(root, kind)
@@ -1089,12 +1182,18 @@ def next_report(root: Path) -> str:
     ask = [t for t in tasks if t.get("needs_user")]
     for t in ask:
         lines.append(f"ASK USER: {t['id']} [{t['status']}] {t.get('failure_class') or ''} — {t['title']}")
+    cfg = load_config(root)
     review = [t for t in tasks if t["status"] == "in_review"]
     for t in review:
-        lines.append(f"REVIEW: {t['id']} → /orcgate:review {t['id']} (agent orcgate:reviewer)")
+        lines.append(f"REVIEW: {t['id']} → /orcgate:review {t['id']} "
+                     f"(agent orcgate:reviewer model={model_for(root, t, 'reviewer', cfg)})")
     ready = [t for t in tasks if t["status"] == "ready"]
     for t in ready:
-        lines.append(f"READY: {t['id']} owner={t['owner']} → agent orcgate:{agent_for(t['owner'])} — {t['title']}")
+        agent = agent_for(t["owner"])
+        ctx = (f" (context: orcgate:context-builder model={model_for(root, t, 'context-builder', cfg)})"
+               if agent == "coder" else "")
+        lines.append(f"READY: {t['id']} owner={t['owner']} → agent orcgate:{agent} "
+                     f"model={model_for(root, t, cfg=cfg)}{ctx} — {t['title']}")
     if ready:
         lines.append(f"NEXT: {ready[0]['id']}")
     elif not review and not ask:
@@ -1349,6 +1448,11 @@ def brief_text(root: Path, key: str | None = None, max_chars: int = BRIEF_MAX_CH
            f"Goal: {_short(cfg.get('goal'), 300)}"]
     if cfg.get("workflow") == "k":
         out.append(f"Workflow: K (verify: {'yes' if cfg.get('verify') else 'MISSING — K cannot reach DONE'})")
+    cfg_errs = config_errors(cfg)
+    if cfg_errs:
+        out.append(f"config: ERROR — {_short(cfg_errs[0], 220)}"
+                   + (f" (+{len(cfg_errs) - 1} more)" if len(cfg_errs) > 1 else "")
+                   + ". The user fixes .orchestra/config.yaml (agents never edit it); `orc validate` lists all.")
     if safe_mode():
         out.append("⚠ ORC_SAFE_MODE is on: only the kit and .orchestra/config.yaml may be edited; orc refuses commands "
                    "that change the workflow. The user turns this variable off when the repair is done.")
@@ -1367,7 +1471,12 @@ def brief_text(root: Path, key: str | None = None, max_chars: int = BRIEF_MAX_CH
     import orc_k  # noqa: PLC0415
     open_tasks = [t for t in tasks if not orc_k.is_closed(t.get("status"))]
     out.append(f"\n## Open tasks ({len(open_tasks)})")
-    out += [f"- {t['id']} [{t['status']}] {t['owner']}: {_short(t['title'], 70)}"
+    def stale(t):
+        if t.get("workflow") != "k" and t.get("status") != "dispatched":
+            return ""  # a task left dispatched also keeps the guard in research/implement mode
+        days = orc_k.stale_days(root, t["id"])
+        return f" (stale: no change for {days} days — finish or `orc:abort {t['id']}`)" if days > STALE_REQUEST_DAYS else ""
+    out += [f"- {t['id']} [{t['status']}] {t['owner']}: {_short(t['title'], 70)}{stale(t)}"
             + (f" — {_short(t.get('summary'), 100)}" if t.get("summary") else "")
             for t in open_tasks[:12]] or ["- (none)"]
     ready = [t["id"] for t in open_tasks if t["status"] == "ready"]
@@ -1472,6 +1581,23 @@ def ask_text(root: Path, art_id: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def dispatched_models(root: Path) -> dict:
+    """TASK → the model recorded on its latest move to `dispatched` (journal, `orc advance --model`)."""
+    path = journal_path(root)
+    used = {}
+    if path.exists():
+        for line in read_text(path).splitlines():
+            if '"model"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("to") == "dispatched" and row.get("model"):
+                used[row.get("id")] = row["model"]
+    return used
+
+
 def report(root: Path, task_id: str) -> str:
     """Deterministic report for one request: root task, plan, child tasks, review, evidence, decisions."""
     _, _, root_task = find_entry(root, task_id)
@@ -1487,12 +1613,13 @@ def report(root: Path, task_id: str) -> str:
     out = [f"# Report {task_id}: {root_task['title']}", ""]
     for a in plans:
         out.append(f"- Plan {a['id']} v{a['version']} [{a['status']}]: {a['summary']}")
-    out += ["", "## Tasks", "| Task | Status | Attempts | Result |", "|---|---|---|---|"]
+    used = dispatched_models(root)
+    out += ["", "## Tasks", "| Task | Status | Attempts | Model | Result |", "|---|---|---|---|---|"]
     for t in kids:
         flag = f" ⚠ {t['failure_class']}" if t.get("failure_class") else ""
         ask = " **needs user**" if t.get("needs_user") else ""
         out.append(f"| {t['id']} {_short(t['title'], 60)} | {t['status']}{flag}{ask} | "
-                   f"{t.get('attempts', 0)} | {_short(t.get('summary'), 140)} |")
+                   f"{t.get('attempts', 0)} | {used.get(t['id'], '')} | {_short(t.get('summary'), 140)} |")
     out += ["", "## Evidence"]
     for t in kids:
         evs = [evidence[o] for o in as_list(t.get("outputs")) if o in evidence]
@@ -1746,6 +1873,27 @@ def _md_cell(text) -> str:
     return " ".join(str(text or "").split()).replace("|", "\\|")
 
 
+def plans_index_lines(root: Path) -> list:
+    """Accepted plan/research ARTs (latest version only): the ART is the source of truth, docs/INDEX.md links to it."""
+    arts = load_registry(root, "artifact")
+    superseded = {a.get("supersedes") for a in arts if a.get("supersedes") and a.get("status") != "rejected"}
+    keep = sorted((a for a in arts if a.get("type") in ("plan", "research") and a.get("status") == "accepted"
+                   and a.get("id") not in superseded), key=lambda a: a["id"])
+    if not keep:
+        return []
+    tasks = {t["id"]: t for t in load_registry(root, "task") if isinstance(t, dict)}
+    out = ["### Plans (orcgate)", "",
+           "<!-- Plans and research live in .orchestra/artifacts/ (source of truth); this list only links to them. -->",
+           "", "| ART | Type | Task | Request | Summary |", "|---|---|---|---|---|"]
+    for a in keep:
+        t = tasks.get(a.get("task")) or {}
+        r = tasks.get(t.get("parent")) or {}
+        req = f"{r['id']} [{r.get('status')}]" if r else ""
+        out.append(f"| [{a['id']}](../{ORC_DIR}/artifacts/{a['id']}.md) | {a['type']} | {_md_cell(a.get('task'))} | "
+                   f"{_md_cell(req)} | {_md_cell(a.get('summary'))} |")
+    return out + [""]
+
+
 def docs_index(root: Path) -> str:
     """Regenerate the automatic part of docs/INDEX.md from frontmatter. The hand-written part is kept."""
     groups = {}
@@ -1777,6 +1925,7 @@ def docs_index(root: Path) -> str:
                          f"{_md_cell(fm.get('summary'))} | {max(1, round(size / 1024))} |")
         lines.append("")
     if find_root(root) is not None:
+        lines += plans_index_lines(root)
         decs = [d for d in load_registry(root, "decision") if d.get("status") == "accepted"]
         if decs:
             lines += ["### Recent decisions (orcgate)", ""]
@@ -1839,6 +1988,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("advance", help="change status by the rules: orc advance ID --to X")
     s.add_argument("id")
     s.add_argument("--to", required=True)
+    s.add_argument("--model", help="alias the subagent is called with (recorded in the journal on → dispatched)")
+
+    s = sub.add_parser("model", help="the model alias to call the subagent of a task with: orc model TASK [--role R]")
+    s.add_argument("id")
+    s.add_argument("--role", choices=MODEL_ROLES)
 
     s = sub.add_parser("triage", help="deterministic level (shadow): run ID --stage 1|2|3 [--form F] | show ID | "
                                       "downgrade ID --to N --reason R")
@@ -1981,10 +2135,18 @@ def _run(root: Path, args) -> int:
         guarded_set(root, args.id, parse_assignments(args.pairs))
         print(f"updated {args.id}")
     elif args.cmd == "advance":
-        e = advance(root, args.id, args.to)
+        e = advance(root, args.id, args.to, model=args.model)
         print(f"{args.id} → {e['status']}")
         if e.get("_note"):
             print(e["_note"])
+    elif args.cmd == "model":
+        errs = model_errors(load_config(root))
+        if errs:
+            raise OrcError("; ".join(errs))
+        _, _, e = find_entry(root, args.id)
+        if kind_of(args.id) != "task":
+            raise OrcError("orc model takes a TASK")
+        print(model_for(root, e, args.role))
     elif args.cmd == "triage":
         import orc_triage  # noqa: PLC0415
         if args.action == "show":

@@ -2,6 +2,7 @@
 name: context-builder
 description: Context Builder role of orcgate. Builds the CTX context package for a TASK from the task, the KNOWLEDGE_MAP and the code graph (if any), with a fallback when there is no graph. Use before the Orchestrator dispatches a task to the coder.
 tools: Read, Grep, Glob, Bash, Edit, Write
+model: sonnet
 ---
 
 You are the **Context Builder** in orcgate. You receive a TASK ID and a CTX ID that has already been issued.

@@ -13,7 +13,9 @@ Design:
 
 from __future__ import annotations
 
+import datetime
 import json
+import re
 from pathlib import Path
 
 import orc_core as oc
@@ -124,6 +126,16 @@ def advance_root(root: Path, e: dict, to: str) -> tuple:
         import orc_approval  # noqa: PLC0415
         ok, why = orc_approval.check(root, rid)
         _need(ok, f"{rid}: APPROVAL_MISSING — {why}; the user types the `orc:approve ...` line, then `orc approve ...`")
+        if frm != "VERIFYING":  # VERIFYING → IMPLEMENTING is the same request going back to repair
+            clash = scope_clashes(root, rid, tasks)
+            _need(not clash, f"{rid}: another request is being implemented with an overlapping write_scope: "
+                             + "; ".join(clash) + ". Finish it (DONE) or abort it first; requests share one working "
+                             "tree, so `orc verify` of one would see the other's files")
+            busy = [t["id"] for t in tasks if is_root(t) and t["id"] != rid
+                    and t.get("status") in ("IMPLEMENTING", "VERIFYING")]
+            if busy:
+                note = (f"warning: {', '.join(busy)} is also being implemented (write_scopes do not overlap); "
+                        "finish one request before starting the next when you can")
         if level == 3:
             _need([d for d in oc.load_registry(root, "decision") if d.get("status") == "accepted"
                    and d.get("scope") in set(request_ids(root, rid))], f"{rid}: L3 needs an accepted DEC for the request")
@@ -137,6 +149,7 @@ def advance_root(root: Path, e: dict, to: str) -> tuple:
         _need([t for t in kids if t.get("status") != "done"], f"{rid}: every coder task is done — advance to DONE")
     entry = oc.set_fields(root, rid, {"status": to})
     stage = {"TRIAGED": 1, "PLANNED": 2, "VERIFYING": 3}.get(to)
+    warn = note
     if stage:  # triage in shadow mode — recorded only, errors never block K
         import orc_triage  # noqa: PLC0415
         try:
@@ -150,7 +163,56 @@ def advance_root(root: Path, e: dict, to: str) -> tuple:
         ids += [d["id"] for d in oc.load_registry(root, "decision")
                 if d.get("status") == "proposed" and d.get("scope") in scope]
         note = orc_approval.request(root, ids)
+    if warn and warn not in note:
+        note = (note + "\n" + warn).strip()
     return entry, note
+
+
+def request_scope(root: Path, rid: str, tasks=None) -> list:
+    return sorted({p for t in coders(root, rid, tasks) for p in oc.as_list(t.get("write_scope"))})
+
+
+def _literal(pattern: str) -> str:
+    """The part of a path pattern before its first wildcard (`renderer/src/**/*.ts` → `renderer/src/`)."""
+    m = re.search(r"[*?\[]", pattern)
+    return pattern[: m.start()] if m else pattern
+
+
+def scopes_overlap(a: list, b: list) -> bool:
+    """Conservative: two write_scopes overlap when a pattern of one matches the literal prefix of a pattern of the other."""
+    import orc_guard  # noqa: PLC0415
+    for x in a:
+        for y in b:
+            lx, ly = _literal(x).rstrip("/"), _literal(y).rstrip("/")
+            if not lx or not ly or orc_guard.match_path(lx, [y]) or orc_guard.match_path(ly, [x]) \
+                    or lx.startswith(ly + "/") or ly.startswith(lx + "/") or lx == ly:
+                return True
+    return False
+
+
+def scope_clashes(root: Path, rid: str, tasks=None) -> list:
+    """Other K requests in IMPLEMENTING/VERIFYING whose combined write_scope overlaps this request's."""
+    tasks = tasks or oc.load_registry(root, "task")
+    mine = request_scope(root, rid, tasks)
+    out = []
+    for t in tasks:
+        if is_root(t) and t["id"] != rid and t.get("status") in ("IMPLEMENTING", "VERIFYING"):
+            theirs = request_scope(root, t["id"], tasks)
+            if mine and theirs and scopes_overlap(mine, theirs):
+                out.append(f"{t['id']} [{t['status']}] {', '.join(theirs[:4])}")
+    return out
+
+
+def stale_days(root: Path, rid: str, now=None) -> int:
+    """Days since the request's latest status change (journal)."""
+    ts = _last_row_ts(root, rid)
+    if not ts:
+        return 0
+    try:
+        then = datetime.datetime.fromisoformat(ts)
+    except ValueError:
+        return 0
+    return max(0, ((now or datetime.datetime.now()) - then).days)
 
 
 def child_dispatch_check(root: Path, t: dict) -> None:

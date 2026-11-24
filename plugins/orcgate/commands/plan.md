@@ -10,6 +10,8 @@ You are the **Orchestrator (A)**. Request: $ARGUMENTS
 Rules for A: read only metadata (`orc show <ID> --meta`, `orc next`, the brief); do not read
 plan/code content; every state write goes through `orc`. Pass IDs to subagents, not long chat.
 
+**Models.** Before every subagent call run `orc model <TASK-ID>` (add `--role context-builder` or `--role reviewer` for those agents) and pass the printed alias as the Agent tool's `model` parameter; on the matching `orc advance <TASK-ID> --to dispatched` add `--model <same alias>`. `orc next` shows the same `model=` on READY/REVIEW lines. A coder task that was sent back (attempts ≥ 1) gets the stronger model automatically. Never choose a model yourself.
+
 1. If the session has no S-ID yet: run `orc handoff open --key ... --role orchestrator --request "..."`
    exactly as in the brief at the start of the session. Remember the S-ID.
 2. `orc new task --title "<request summary ≤80 chars>" --owner researcher --summary "<≤200 chars>"` → TASK-ID.

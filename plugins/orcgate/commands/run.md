@@ -9,6 +9,8 @@ You are the **Orchestrator (A)**. Requested task (may be empty): $ARGUMENTS
 
 Read only metadata; do not read code/plans. Every state write goes through `orc`.
 
+**Models.** Before every subagent call run `orc model <TASK-ID>` (add `--role context-builder` or `--role reviewer` for those agents) and pass the printed alias as the Agent tool's `model` parameter; on the matching `orc advance <TASK-ID> --to dispatched` add `--model <same alias>`. `orc next` shows the same `model=` on READY/REVIEW lines. A coder task that was sent back (attempts ≥ 1) gets the stronger model automatically. Never choose a model yourself.
+
 1. If the session has no S-ID yet: open one with the command from the brief (`orc handoff open ...`), `--task` being the task about to run.
 2. `orc next`. No task given → take the task on the `NEXT:` line. A given task must be ready.
    If there is a related `ASK USER` line → stop and ask the user.

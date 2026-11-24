@@ -1,9 +1,8 @@
 #!/usr/bin/env python
-"""PreToolUse hook: guard driven by task state. Currently SHADOW — always allows, only writes
-`.orchestra/runtime/guard-shadow.jsonl`. No-op without .orchestra/.
-
-An enforcing mode will block with exit 2 and fail closed on errors; the escape hatch will then be ORC_SAFE_MODE=1
-(only the kit + orchestra config may be edited), with no shortcut to turn the guard off.
+"""PreToolUse hook: guard driven by task state. Every decision is logged to
+`.orchestra/runtime/guard-shadow.jsonl` (shadow). Only the rules the project turned on in `guard.enforce`
+(edit_write, git_push) block the tool: exit 2 with the reason on stderr, which Claude Code shows to the model.
+No-op without .orchestra/. Escape hatch: ORC_SAFE_MODE=1 (only the kit + orchestra config may be edited).
 """
 import json
 import sys
@@ -18,7 +17,10 @@ def main() -> int:
         raw = sys.stdin.buffer.read().decode("utf-8")
         payload = json.loads(raw or "{}")
         import orc_guard  # stdlib only
-        orc_guard.shadow(payload)
+        rec = orc_guard.shadow(payload)
+        if rec and rec.get("enforced"):
+            print(f"[orcgate guard] blocked: {rec['enforced']}", file=sys.stderr)
+            return 2
     except Exception as exc:  # shadow: never break the session
         print(f"[orcgate] guard shadow error: {exc}", file=sys.stderr)
         try:  # record the error so the shadow report can count it (never break the session)
