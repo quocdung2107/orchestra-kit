@@ -170,6 +170,20 @@ def plugin_enabled(start) -> bool:
     return False
 
 
+def bash_path(path) -> str:
+    """A path as the Bash tool's shell writes it: `C:\\Users\\x` -> `/c/Users/x` (Git Bash); POSIX paths unchanged."""
+    text = str(path)
+    m = re.match(r"^([A-Za-z]):[\\/](.*)$", text)
+    if m:
+        return "/" + m.group(1).lower() + "/" + m.group(2).replace("\\", "/")
+    return text
+
+
+def path_first_line(bin_dir) -> str:
+    """The $CLAUDE_ENV_FILE line that puts the plugin's bin/ before any other `orc` on PATH."""
+    return f'export PATH="{bash_path(bin_dir)}:$PATH"'
+
+
 def legacy_hook_shadowed(cwd) -> bool:
     """Bridge for the legacy (pre-plugin) install: a global hook without CLAUDE_PLUGIN_ROOT yields to the
     plugin in projects that enabled the plugin, so hooks do not run twice."""

@@ -21,6 +21,9 @@ All notable changes to this project are documented here. Versions follow [Semant
 - **Subagents run in the foreground.** The commands tell the Orchestrator to call every subagent with
   `run_in_background: false` and to fix an envelope with a new foreground call instead of SendMessage, so a run no longer
   stalls waiting for a background notification that never arrives.
+- **The plugin's `orc` wins on PATH.** Claude Code appends plugin `bin/` after the user's PATH, so an older `orc`
+  installed elsewhere ran instead. The SessionStart hook now adds `export PATH="<plugin>/bin:$PATH"` to
+  `$CLAUDE_ENV_FILE` (Bash tool only), in projects with `.orchestra/`.
 
 ## [0.3.0] — 2026-11-07
 

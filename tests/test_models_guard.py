@@ -311,3 +311,27 @@ class ForegroundSubagentRuleTest(unittest.TestCase):
             text = (plugin / rel).read_text(encoding="utf-8")
             self.assertIn("run_in_background: false", text, rel)
             self.assertNotIn("to fix (at most", text, rel)
+
+
+class PluginOrcFirstOnPathTest(Base):
+    """Claude Code appends the plugin bin/ to PATH; SessionStart puts it first through $CLAUDE_ENV_FILE."""
+
+    def test_bash_path(self):
+        self.assertEqual(oc.bash_path(r"C:\Users\me\kit\bin"), "/c/Users/me/kit/bin")
+        self.assertEqual(oc.bash_path("/home/me/kit/bin"), "/home/me/kit/bin")
+        self.assertEqual(oc.path_first_line("/k/bin"), 'export PATH="/k/bin:$PATH"')
+
+    def test_session_start_writes_env_file(self):
+        import os
+        import subprocess
+        env_file = self.root / "env.sh"
+        env_file.write_text("export A=1\n", encoding="utf-8")
+        env = dict(os.environ, CLAUDE_ENV_FILE=str(env_file))
+        hook = Path(__file__).resolve().parents[1] / "plugins" / "orcgate" / "hooks" / "session_start"
+        res = subprocess.run([sys.executable, str(hook)], input=json.dumps({"cwd": str(self.root)}),
+                             capture_output=True, text=True, env=env, cwd=str(self.root))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("Orcgate brief", res.stdout)
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[0], "export A=1")
+        self.assertEqual(lines[1], oc.path_first_line(hook.parent.parent / "bin"))
