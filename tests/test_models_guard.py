@@ -299,3 +299,15 @@ None
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ForegroundSubagentRuleTest(unittest.TestCase):
+    """Commands that call subagents keep them in the foreground (a background call can stall the run)."""
+
+    def test_commands_require_foreground_agents(self):
+        plugin = Path(__file__).resolve().parents[1] / "plugins" / "orcgate"
+        for rel in ("commands/auto.md", "commands/plan.md", "commands/run.md", "commands/review.md",
+                    "references/auto-legacy.md"):
+            text = (plugin / rel).read_text(encoding="utf-8")
+            self.assertIn("run_in_background: false", text, rel)
+            self.assertNotIn("to fix (at most", text, rel)

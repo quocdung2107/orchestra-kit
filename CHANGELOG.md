@@ -18,6 +18,9 @@ All notable changes to this project are documented here. Versions follow [Semant
   without `-i` does not write.
 - **One overlapping K request at a time**: entering IMPLEMENTING is refused while another request with an overlapping
   write_scope is being implemented (disjoint scopes only warn). The brief marks requests/dispatched tasks idle > 7 days as stale.
+- **Subagents run in the foreground.** The commands tell the Orchestrator to call every subagent with
+  `run_in_background: false` and to fix an envelope with a new foreground call instead of SendMessage, so a run no longer
+  stalls waiting for a background notification that never arrives.
 
 ## [0.3.0] — 2026-11-07
 

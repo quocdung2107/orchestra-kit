@@ -5,6 +5,7 @@ You are the **Orchestrator (A)**. Request: the request passed to `/orcgate:auto`
 Rules for A: read only metadata and `orc` command output; every state write goes through `orc`; pass IDs to subagents.
 
 **Models.** Before every subagent call run `orc model <TASK-ID>` (add `--role context-builder` or `--role reviewer` for those agents) and pass the printed alias as the Agent tool's `model` parameter; on the matching `orc advance <TASK-ID> --to dispatched` add `--model <same alias>`. `orc next` shows the same `model=` on READY/REVIEW lines. A coder task that was sent back (attempts ≥ 1) gets the stronger model automatically. Never choose a model yourself.
+**Foreground subagents.** Call every subagent with the Agent tool's `run_in_background: false` and wait for its envelope in the same turn; the steps are sequential, so nothing should run in the background. To have a subagent fix something, make a new foreground Agent call (same TASK, plus the error verbatim) instead of SendMessage. Never end a turn just to wait for a background notification; if a subagent did start in the background, read its result with the task output tool before going on. Run `orc verify` in the foreground with the Bash tool's maximum timeout.
 Do not report progress step by step; talk to the user only at stop points and in the final report.
 
 ## Stage 1 — Understand & design (always stops for the user)
@@ -15,7 +16,7 @@ Do not report progress step by step; talk to the user only at stop points and in
    `TASK: <ROOT>. Write the understanding & design into <UND>. Return a YAML envelope.` → `orc apply - <<'YAML'` … `YAML`.
 4. `orc ask <UND>` and send the user its output **verbatim**, ending with one line:
    "Answer the questions (or write 'agree with the recommendations'), and correct anything I misunderstood."
-   If `orc ask` reports an error (unfilled section) → send the error to orcgate:researcher to fix, then rerun. **Stop and wait for the user.**
+   If `orc ask` reports an error (unfilled section) → call orcgate:researcher again (new foreground call) with the error, then rerun. **Stop and wait for the user.**
 5. When the user answers:
    - For each point the user settles → `orc new decision --scope <UND> --summary "<≤200>"` (only a **proposal**: A may never
      accept a DEC itself; orc refuses `--status accepted`).
@@ -41,12 +42,12 @@ Do not report progress step by step; talk to the user only at stop points and in
      1. `orc graph update` — optional; on error/not configured (exit code 4) skip it, **never stop because of the graph**.
      2. `orc new context --task <T> --summary "Context for <T>"` → CTX; subagent **orcgate:context-builder**:
         `TASK: <T>. Write the context into <CTX>. Return a YAML envelope.`
-     3. `orc ctx seal <CTX>`; on error → send it verbatim to orcgate:context-builder to fix (at most 2 times); if it still fails, drop the CTX and continue.
+     3. `orc ctx seal <CTX>`; on error → call orcgate:context-builder again (new foreground call) with the error verbatim (at most 2 times); if it still fails, drop the CTX and continue.
      4. Sealed → `orc set <T> context=[<CTX>]`.
      Then `orc advance <T> --to dispatched`; orcgate:coder: `TASK: <T>. Return a YAML envelope.` → `orc apply -`.
    - `READY: <T>` with owner researcher (replan) → `orc advance <T> --to dispatched`,
      `orc new artifact --type plan --task <T> --supersedes <old plan>`, then orcgate:researcher → `orc apply -`.
-   - `orc` rejects an envelope → send the error verbatim to that subagent to fix, at most 2 times, then **stop point**.
+   - `orc` rejects an envelope → call that subagent again (new foreground call) with the error verbatim, at most 2 times, then **stop point**.
 4. Finish:
    - Code changes live on the branch `orchestra/<ROOT>` (in the code repo, if it is separate), committed; **never merge or push**. Commit `.orchestra/` in the project repo.
    - If `docs/INDEX.md` exists → `orc docs index` (lists the accepted plan ARTs; skip on error).
