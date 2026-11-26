@@ -171,7 +171,7 @@ def plugin_enabled(start) -> bool:
 
 
 def bash_path(path) -> str:
-    """A path as the Bash tool's shell writes it: `C:\\Users\\x` -> `/c/Users/x` (Git Bash); POSIX paths unchanged."""
+    """A path as the Bash tool's shell writes it: `D:\\work\\x` -> `/d/work/x` (Git Bash); POSIX paths unchanged."""
     text = str(path)
     m = re.match(r"^([A-Za-z]):[\\/](.*)$", text)
     if m:

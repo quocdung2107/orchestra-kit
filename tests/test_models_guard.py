@@ -317,8 +317,8 @@ class PluginOrcFirstOnPathTest(Base):
     """Claude Code appends the plugin bin/ to PATH; SessionStart puts it first through $CLAUDE_ENV_FILE."""
 
     def test_bash_path(self):
-        self.assertEqual(oc.bash_path(r"C:\Users\me\kit\bin"), "/c/Users/me/kit/bin")
-        self.assertEqual(oc.bash_path("/home/me/kit/bin"), "/home/me/kit/bin")
+        self.assertEqual(oc.bash_path(r"D:\work\kit\bin"), "/d/work/kit/bin")
+        self.assertEqual(oc.bash_path("/opt/kit/bin"), "/opt/kit/bin")
         self.assertEqual(oc.path_first_line("/k/bin"), 'export PATH="/k/bin:$PATH"')
 
     def test_session_start_writes_env_file(self):
