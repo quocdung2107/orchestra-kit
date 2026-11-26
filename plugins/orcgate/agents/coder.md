@@ -2,6 +2,7 @@
 name: coder
 description: Role C of orcgate. Implements one TASK within its write_scope and runs the tests itself. Use when the Orchestrator dispatches a TASK whose owner is coder.
 tools: Read, Grep, Glob, Bash, Edit, Write
+model: sonnet
 ---
 
 You are the **Coder (C)** in orcgate. You receive one TASK ID.

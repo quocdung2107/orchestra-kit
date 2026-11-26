@@ -13,6 +13,9 @@ not a sandbox: scripts/`python -c` can still write, V2 catches it afterwards.
 - Read/Grep: block reading secret files. Web: not while editing/checking code; during research only through researcher-external.
 - Agent/SubagentHandback/…: no writes ⇒ allowed. Unknown tools: allowed, logged as "unclassified tool".
 SAFE_MODE (`ORC_SAFE_MODE=1`): Edit/Write only the kit + `.orchestra/config.yaml`; state is not read.
+
+Everything above is shadow (logged in runtime/guard-shadow.jsonl). Only the rules a project lists in
+`guard.enforce` (edit_write, git_push — see enforce_decision) actually block the tool.
 """
 
 from __future__ import annotations
@@ -40,7 +43,7 @@ SECRET_OK = re.compile(r"\.(example|sample|template)$")
 
 DENY_SHELL = [
     ("git push", re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+push\b")),
-    ("git merge", re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+merge\b")),
+    ("git merge", re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+merge(?![\w-])")),  # not `git merge-base`
     ("git rebase", re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+rebase\b")),
     ("git filter-branch", re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+filter-(?:branch|repo)\b")),
     ("git reset --hard", re.compile(r"\bgit\b[^;&|\n]*\breset\s+(?:\S+\s+)*--hard\b")),
@@ -61,8 +64,10 @@ HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?(?:\n\s*\2\b|\Z)", re.S)
 # Quoted strings; an unclosed quote (truncated/invalid command) runs to the end of the command
 QUOTED = re.compile(r"'[^'\n]*(?:'|$)|\"(?:[^\"\\]|\\.)*(?:\"|$)", re.S)
 SEGMENT = re.compile(r"&&|\|\||;|\||\n")
-WRITE_OPS = re.compile(r"(?:^|\s)(?:\d?>>?|tee|sed|rm|mv|cp|touch|truncate|Set-Content|Add-Content|Out-File|"
+WRITE_OPS = re.compile(r"(?:^|\s)(?:\d?>>?|tee|rm|mv|cp|touch|truncate|Set-Content|Add-Content|Out-File|"
                        r"New-Item|Copy-Item|Move-Item|Remove-Item|Clear-Content)(?=\s|$)")
+# sed writes only in place (-i / --in-place); `sed -n 1,80p file` only reads
+SED_INPLACE = re.compile(r"(?:^|\s)sed\s+(?:\S+\s+)*?(?:-i\S*|--in-place\S*)(?=\s|$)")
 REDIRECT = re.compile(r"(?<![<\d&])\d?>>?(?!&)\s*(\S+)")
 
 
@@ -198,8 +203,8 @@ def write_targets(view: str) -> list:
     """Explicit write targets: after `>`/`>>` redirection, and arguments of tee/sed -i/rm/mv/cp/… in the same command segment."""
     out = [m.group(1) for m in REDIRECT.finditer(view)]
     for seg in SEGMENT.split(view):
-        if WRITE_OPS.search(seg) and not seg.strip().startswith(("cat ", "echo ")):
-            m = WRITE_OPS.search(seg)
+        m = WRITE_OPS.search(seg) or SED_INPLACE.search(seg)
+        if m and not seg.strip().startswith(("cat ", "echo ")):
             out += [w for w in seg[m.end():].split() if not w.startswith("-") and w not in ("Q", "<<HEREDOC")]
     return [t for t in out if t not in ("/dev/null", "$null", "nul", "NUL", "&1", "&2")]
 
@@ -299,6 +304,56 @@ def decide(root: Path, active, tool: str, ti: dict, agent_type: str | None = Non
     return "allow", f"unclassified tool: {tool}", mode
 
 
+# ---------------------------------------------------------------- enforcing rules (opt-in: config guard.enforce)
+
+def enforce_decision(root: Path, active, tool: str, ti: dict, safe: bool | None = None,
+                     kit: Path = KIT_DIR) -> tuple:
+    """(block?, reason) for the rules the project turned on in `guard.enforce` (copied into active.json by orc).
+    Only high-precision rules can be enforced:
+    - edit_write: Edit/Write/MultiEdit/NotebookEdit into deny_always areas; while a coder task runs, files outside its
+      write_scope; while a K request is open and no coder task runs, any project file that is not a permitted
+      artifact/context/session file or matched by `guard.always_writable`. No open K request ⇒ unchanged (allowed).
+    - git_push: `git push` in Bash/PowerShell.
+    Everything else stays shadow (logged only)."""
+    rules = set((active or {}).get("enforce") or [])
+    if not rules:
+        return False, ""
+    target = target_of(tool, ti)
+    if tool in SHELL_TOOLS and "git_push" in rules:
+        if DENY_SHELL[0][1].search(shell_view(target)):
+            return True, "git push is blocked in this project (guard.enforce: git_push); the user pushes by hand"
+        return False, ""
+    if tool not in WRITE_TOOLS or "edit_write" not in rules:
+        return False, ""
+    safe = safe_mode() if safe is None else safe
+    if safe:
+        p = Path(target) if Path(target).is_absolute() else root / target
+        if under(p, kit) or rel_path(root, target) == ".orchestra/config.yaml":
+            return False, ""
+        return True, "SAFE_MODE: only the kit and .orchestra/config.yaml may be edited"
+    writable = set(active.get("writable") or [])
+    hit = protected_hit(root, target, writable, active.get("protected"))
+    if hit:
+        return True, f"{hit} is written only by orc / the user (deny_always)"
+    rel = rel_path(root, target)
+    if rel is None or rel in writable or match_path(rel, active.get("always_writable") or []):
+        return False, ""
+    coders = modes(active)["implement"]
+    if coders:
+        scope = [p for t in coders for p in t.get("write_scope") or []]
+        if match_path(rel, scope):
+            return False, ""
+        return True, (f"{rel} is outside the write_scope of {', '.join(t['id'] for t in coders)}; "
+                      "stop and return status: blocked, or ask the Orchestrator for a task with that scope")
+    open_reqs = active.get("open_requests") or []
+    if open_reqs:
+        ids = ", ".join(f"{r['id']} [{r.get('status')}]" for r in open_reqs[:3])
+        return True, (f"no coder task is running while K request(s) {ids} are open: project files are changed only "
+                      "by a dispatched coder task. Create a child task with a write_scope (orc new task --parent …), "
+                      "or the user adds the path to guard.always_writable")
+    return False, ""
+
+
 def load_active(root: Path):
     path = root / ".orchestra" / "runtime" / "active.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
@@ -306,10 +361,12 @@ def load_active(root: Path):
 
 def refresh_active(root: Path) -> None:
     """Shadow on projects still running a pre-0.2 `orc` (which does not write active.json): rebuild it from the registry when stale.
-    Writes only `runtime/active.json` (gitignored), never changes the workflow. Enforcing mode does not use this path."""
+    Writes only `runtime/active.json` (gitignored), never changes the workflow. Also reruns after the user edits
+    config.yaml, so a change to guard.enforce takes effect on the next tool call."""
     o = root / ".orchestra"
     act = o / "runtime" / "active.json"
-    src = [o / "state" / "tasks.yaml", o / "state" / "artifacts.yaml", o / "state" / "contexts.yaml"]
+    src = [o / "state" / "tasks.yaml", o / "state" / "artifacts.yaml", o / "state" / "contexts.yaml",
+           o / "config.yaml"]  # config: guard.enforce / always_writable are copied into active.json
     newest = max((p.stat().st_mtime for p in src if p.exists()), default=0)
     if act.exists() and act.stat().st_mtime >= newest:
         return
@@ -318,23 +375,37 @@ def refresh_active(root: Path) -> None:
 
 
 def shadow(payload: dict) -> dict | None:
-    """Hook logic in shadow mode. Returns the logged record (for tests), None if this is not an orchestra project."""
+    """Hook logic: logs every decision (shadow); a record with `enforced` (a rule turned on in guard.enforce) makes the
+    hook block the tool (exit 2). Returns the logged record, None if this is not an orchestra project."""
     t0 = time.perf_counter()
     root = find_root(payload.get("cwd") or ".")
     if root is None:
         return None
     tool, ti = payload.get("tool_name") or "", payload.get("tool_input") or {}
+    active, block, why = None, False, ""
     try:
         if not safe_mode():
             refresh_active(root)
-        decision, reason, mode = decide(root, None if safe_mode() else load_active(root), tool, ti,
-                                        payload.get("agent_type"))
-    except Exception as exc:  # noqa: BLE001 - enforcing mode will exit 2
+        active = None if safe_mode() else load_active(root)  # SAFE_MODE never reads state (it may be broken)
+        decision, reason, mode = decide(root, active, tool, ti, payload.get("agent_type"))
+    except Exception as exc:  # noqa: BLE001
         decision, reason, mode = "deny", f"guard error (fail-closed): {exc}", "error"
+    try:
+        if safe_mode():
+            try:
+                active = load_active(root)
+            except Exception:  # noqa: BLE001 - broken state in SAFE_MODE: no enforced rules known
+                active = None
+        block, why = enforce_decision(root, active, tool, ti)
+    except Exception as exc:  # noqa: BLE001 - an enforced rule that cannot be evaluated fails closed for writes
+        if tool in WRITE_TOOLS and "edit_write" in set((active or {}).get("enforce") or []):
+            block, why = True, f"guard error (fail-closed): {exc}"
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "session": payload.get("session_id"),
            "agent_type": payload.get("agent_type"), "tool": tool, "target": target_of(tool, ti)[:200],
            "mode": mode, "decision": decision, "reason": reason,
            "ms": round((time.perf_counter() - t0) * 1000, 1)}
+    if block:
+        rec["enforced"] = why
     log = root / ".orchestra" / "runtime" / "guard-shadow.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as f:

@@ -99,6 +99,28 @@ Start a new session in the project: the brief (goal, open tasks, decisions waiti
 
 Subagents: `orcgate:researcher`, `orcgate:coder`, `orcgate:reviewer`, `orcgate:context-builder`.
 
+### Models
+
+| Agent | Model |
+|---|---|
+| main session (Orchestrator) | whatever you chose with `/model` |
+| `orcgate:researcher` (understanding, plan) | `opus` |
+| `orcgate:reviewer` | `opus` (independent of the coder) |
+| `orcgate:coder` | `sonnet`; `opus` for a task sent back by the reviewer |
+| `orcgate:context-builder` | `sonnet` |
+
+`orc next` and `orc model <TASK>` print the alias; the Orchestrator passes it when it calls the subagent, and `orc report`
+shows the model each task ran with. Override per project in `.orchestra/config.yaml`:
+
+```yaml
+models:
+  coder: opus          # keys: researcher, reviewer, coder, context-builder, coder_retry
+```
+
+Claude Code applies, highest first: the model passed when the agent is called, the agent's `model:` frontmatter, then
+`CLAUDE_CODE_SUBAGENT_MODEL`. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` overrides all of them. On Bedrock/Vertex the aliases may
+resolve to older models; an organization's `availableModels` can substitute them.
+
 ### Workflow K and approvals
 
 1. **Understand & design** — the researcher restates the request, proposes a design and lists questions.
@@ -122,8 +144,18 @@ optional; without it, a text-search fallback is used. See SCHEMA.md §10.
 
 ## Known limitations
 
-- The guard (PreToolUse hook) runs in **shadow mode**: it records what it would deny in `.orchestra/runtime/guard-shadow.jsonl`
-  but never blocks. `orc verify` is the actual check, after the fact.
+- The guard (PreToolUse hook) runs in **shadow mode** by default: it records what it would deny in
+  `.orchestra/runtime/guard-shadow.jsonl` but never blocks. Two precise rules can be turned on per project:
+
+  ```yaml
+  guard:
+    enforce: [edit_write, git_push]
+    always_writable: [HANDOFF.md]   # files you let any session edit while a request is open
+  ```
+
+  `edit_write` blocks edits outside the running coder task's `write_scope`, and edits to project files while a K request
+  is open but no coder task runs (ask for a child task instead). `git_push` blocks `git push`. `orc verify` still checks
+  everything after the fact.
 - Triage levels are computed in shadow mode as well; every request currently needs an explicit approval.
 - Bash is not a sandbox: a script can still write outside `write_scope`; `orc verify` reports it afterwards.
 - Without a usable Python the hooks do nothing except print one warning (they never break the session), so approvals cannot be recorded; see Troubleshooting.
